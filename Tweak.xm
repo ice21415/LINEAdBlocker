@@ -69,6 +69,7 @@ static BOOL LABIsAdObject(id object) {
 static char LABCollapsedKey;
 static BOOL LABDidPresentDebugReport = NO;
 static const BOOL LABEnableDiagnostics = NO;
+static BOOL LABDidPresentNetworkReport = NO;
 static char LABFixedHeightCollapsedKey;
 static __weak UICollectionView *LABWalletCollectionView;
 static NSIndexPath *LABWalletAdIndexPath;
@@ -148,6 +149,48 @@ static void LABPresentDebugReport(UIView *view) {
                                                 handler:nil]];
         [controller presentViewController:alert animated:YES completion:nil];
     });
+}
+
+static BOOL LABIsPotentialAdRequest(NSURL *URL) {
+    NSString *value = [NSString stringWithFormat:@"%@%@", URL.host.lowercaseString,
+                       URL.path.lowercaseString];
+    return [value containsString:@"advert"] || [value containsString:@"smartch"] ||
+           [value containsString:@"linead"] || [value containsString:@"/ads/"] ||
+           [value containsString:@"/ad/"];
+}
+
+static void LABPresentNetworkReport(NSURL *URL) {
+    if (LABDidPresentNetworkReport || !URL) return;
+    LABDidPresentNetworkReport = YES;
+    NSString *endpoint = [NSString stringWithFormat:@"%@%@", URL.host ?: @"", URL.path ?: @""];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                window = ((UIWindowScene *)scene).windows.firstObject;
+                if (window) break;
+            }
+        }
+        UIViewController *controller = window.rootViewController;
+        while (controller.presentedViewController) controller = controller.presentedViewController;
+        if (!controller) return;
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"LINEAdBlocker 網路診斷"
+                             message:endpoint
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"確定"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [controller presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+static NSURLSessionDataTask *(*LAB_orig_dataTaskWithRequest)(NSURLSession *, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
+static NSURLSessionDataTask *LAB_dataTaskWithRequest(NSURLSession *self, SEL _cmd,
+                                                      NSURLRequest *request,
+                                                      void (^completion)(NSData *, NSURLResponse *, NSError *)) {
+    if (LABIsPotentialAdRequest(request.URL)) LABPresentNetworkReport(request.URL);
+    return LAB_orig_dataTaskWithRequest(self, _cmd, request, completion);
 }
 
 // Hiding a view removes its pixels, but Auto Layout still reserves the view's
@@ -653,6 +696,7 @@ __attribute__((constructor))
 static void LINEAdBlockerInit(void) {
     Class viewClass = objc_getClass("UIView");
     Class controllerClass = objc_getClass("UIViewController");
+    Class sessionClass = objc_getClass("NSURLSession");
     if (viewClass) {
         Method addSubview = class_getInstanceMethod(viewClass, @selector(addSubview:));
         Method didMoveToWindow = class_getInstanceMethod(viewClass, @selector(didMoveToWindow));
@@ -697,6 +741,15 @@ static void LINEAdBlockerInit(void) {
         if (present) {
             LAB_orig_present = (void (*)(UIViewController *, SEL, UIViewController *, BOOL, void (^)(void)))
                 method_setImplementation(present, (IMP)LAB_present);
+        }
+    }
+    if (sessionClass) {
+        Method dataTaskWithRequest = class_getInstanceMethod(
+            sessionClass, @selector(dataTaskWithRequest:completionHandler:));
+        if (dataTaskWithRequest) {
+            LAB_orig_dataTaskWithRequest =
+                (NSURLSessionDataTask *(*)(NSURLSession *, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *)))
+                method_setImplementation(dataTaskWithRequest, (IMP)LAB_dataTaskWithRequest);
         }
     }
 
