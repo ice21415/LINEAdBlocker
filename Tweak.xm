@@ -75,26 +75,11 @@ static void LABCollapseAdView(UIView *view) {
     objc_setAssociatedObject(view, &LABCollapsedKey, @YES,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
-    for (NSLayoutConstraint *constraint in view.constraints) {
-        if (constraint.firstItem == view || constraint.secondItem == view) {
-            [constraints addObject:constraint];
-        }
-    }
-    for (NSLayoutConstraint *constraint in view.superview.constraints) {
-        if (constraint.firstItem == view || constraint.secondItem == view) {
-            [constraints addObject:constraint];
-        }
-    }
-    if (constraints.count) {
-        [NSLayoutConstraint deactivateConstraints:constraints];
-    }
-
     view.hidden = YES;
     view.alpha = 0.0;
     view.userInteractionEnabled = NO;
-    view.translatesAutoresizingMaskIntoConstraints = YES;
-    view.frame = CGRectZero;
+    [view invalidateIntrinsicContentSize];
+    [view.superview setNeedsLayout];
 }
 
 static void LABCollapseAdContainerChain(UIView *adView) {
@@ -103,7 +88,7 @@ static void LABCollapseAdContainerChain(UIView *adView) {
     NSUInteger depth = 0;
 
     // The visible gap is often owned by a wrapper view around the actual ad.
-    // Collapse only wrappers whose visible children are all ad views (or the
+    // Hide only wrappers whose visible children are all ad views (or the
     // candidate we just collapsed). Stop as soon as normal UI is present.
     while (parent && depth < 2 &&
            ![parent isKindOfClass:[UIWindow class]] && parent.superview) {
