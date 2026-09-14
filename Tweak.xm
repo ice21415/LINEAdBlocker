@@ -45,7 +45,24 @@ static BOOL LABClassNameIsAd(NSString *name) {
 }
 
 static BOOL LABIsAdObject(id object) {
-    return object && LABClassNameIsAd(NSStringFromClass([object class]));
+    if (!object) return NO;
+
+    // Walk the complete class hierarchy. Ad SDKs frequently expose a
+    // private subclass whose name does not contain GAD/LAD.
+    for (Class cls = [object class]; cls; cls = class_getSuperclass(cls)) {
+        NSString *name = NSStringFromClass(cls);
+        if (LABClassNameIsAd(name)) return YES;
+
+        NSBundle *bundle = [NSBundle bundleForClass:cls];
+        NSString *bundlePath = bundle.bundlePath.lowercaseString;
+        if ([bundlePath containsString:@"lineadvertisesdk"] ||
+            [bundlePath containsString:@"googleinteractiveima"] ||
+            [bundlePath containsString:@"googlemobileads"] ||
+            [bundlePath containsString:@"lineadsdk"]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 static void (*LAB_orig_addSubview)(UIView *, SEL, UIView *);
