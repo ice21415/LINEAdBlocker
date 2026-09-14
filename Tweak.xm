@@ -97,12 +97,46 @@ static void LABCollapseAdView(UIView *view) {
     view.frame = CGRectZero;
 }
 
+static void LABCollapseAdContainerChain(UIView *adView) {
+    UIView *candidate = adView;
+    UIView *parent = candidate.superview;
+    NSUInteger depth = 0;
+
+    // The visible gap is often owned by a wrapper view around the actual ad.
+    // Collapse only wrappers whose visible children are all ad views (or the
+    // candidate we just collapsed). Stop as soon as normal UI is present.
+    while (parent && depth < 2 &&
+           ![parent isKindOfClass:[UIWindow class]] && parent.superview) {
+        NSUInteger visibleCount = 0;
+        BOOL containsOnlyAdContent = YES;
+        for (UIView *child in parent.subviews) {
+            if (child.hidden || child.alpha <= 0.01) continue;
+            visibleCount++;
+            if (child != candidate && !LABIsAdObject(child)) {
+                containsOnlyAdContent = NO;
+                break;
+            }
+        }
+        if (!containsOnlyAdContent || visibleCount > 1) break;
+
+        LABCollapseAdView(parent);
+        candidate = parent;
+        parent = candidate.superview;
+        depth++;
+    }
+}
+
+static void LABHideAdAndCollapse(UIView *view) {
+    LABCollapseAdView(view);
+    LABCollapseAdContainerChain(view);
+}
+
 static void (*LAB_orig_addSubview)(UIView *, SEL, UIView *);
 static void LAB_addSubview(UIView *self, SEL _cmd, UIView *view) {
     LAB_orig_addSubview(self, _cmd, view);
     if (LABIsAdObject(view)) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            LABCollapseAdView(view);
+            LABHideAdAndCollapse(view);
         });
     }
 }
@@ -111,7 +145,7 @@ static void (*LAB_orig_didMoveToWindow)(UIView *, SEL);
 static void LAB_didMoveToWindow(UIView *self, SEL _cmd) {
     LAB_orig_didMoveToWindow(self, _cmd);
     if (LABIsAdObject(self)) {
-        LABCollapseAdView(self);
+        LABHideAdAndCollapse(self);
     }
 }
 
@@ -128,7 +162,7 @@ static void LAB_present(UIViewController *self, SEL _cmd, UIViewController *vc,
 static void LABRemoveAdViews(UIView *view) {
     for (UIView *child in [view.subviews copy]) {
         if (LABIsAdObject(child)) {
-            LABCollapseAdView(child);
+            LABHideAdAndCollapse(child);
         } else {
             LABRemoveAdViews(child);
         }
