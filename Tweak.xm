@@ -68,7 +68,11 @@ static BOOL LABIsAdObject(id object) {
 
 static char LABCollapsedKey;
 static BOOL LABDidPresentDebugReport = NO;
-static const BOOL LABEnableDiagnostics = YES;
+static const BOOL LABEnableDiagnostics = NO;
+static char LABFixedHeightCollapsedKey;
+static __weak UICollectionView *LABWalletCollectionView;
+static NSIndexPath *LABWalletAdIndexPath;
+static CGFloat LABWalletAdHeight = 0.0;
 
 static NSString *LABDebugChainForView(UIView *view) {
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
@@ -160,6 +164,64 @@ static void LABCollapseAdView(UIView *view) {
     [view invalidateIntrinsicContentSize];
     [view.superview setNeedsLayout];
 
+}
+
+static void LABZeroFixedHeightConstraints(UIView *view) {
+    if (!view || objc_getAssociatedObject(view, &LABFixedHeightCollapsedKey)) return;
+    objc_setAssociatedObject(view, &LABFixedHeightCollapsedKey, @YES,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSArray<NSArray<NSLayoutConstraint *> *> *groups = @[
+        view.constraints ?: @[], view.superview.constraints ?: @[]
+    ];
+    for (NSArray<NSLayoutConstraint *> *constraints in groups) {
+        for (NSLayoutConstraint *constraint in constraints) {
+            BOOL touchesView = constraint.firstItem == view || constraint.secondItem == view;
+            BOOL isHeight = constraint.firstAttribute == NSLayoutAttributeHeight ||
+                            constraint.secondAttribute == NSLayoutAttributeHeight;
+            if (touchesView && isHeight && constraint.constant != 0.0) {
+                constraint.constant = 0.0;
+            }
+        }
+    }
+    [view.superview setNeedsLayout];
+}
+
+static void LABRecordWalletAdCell(UIView *view) {
+    UIView *current = view;
+    UICollectionViewCell *cell = nil;
+    UICollectionView *collectionView = nil;
+    for (NSUInteger depth = 0; current && depth < 7; depth++, current = current.superview) {
+        if (!cell && [NSStringFromClass(current.class) containsString:@"WalletAdvertiseCell"]) {
+            cell = (UICollectionViewCell *)current;
+        }
+        if (!collectionView && [current isKindOfClass:[UICollectionView class]]) {
+            collectionView = (UICollectionView *)current;
+        }
+    }
+    if (cell && collectionView) {
+        NSIndexPath *indexPath = [collectionView indexPathForCell:cell];
+        if (indexPath) {
+            LABWalletCollectionView = collectionView;
+            LABWalletAdIndexPath = [indexPath copy];
+            LABWalletAdHeight = CGRectGetHeight(cell.frame);
+            [collectionView.collectionViewLayout invalidateLayout];
+        }
+    }
+}
+
+static void LABCollapseKnownAdHost(UIView *adView) {
+    for (UIView *current = adView; current; current = current.superview) {
+        NSString *name = NSStringFromClass(current.class);
+        if ([name containsString:@"TopBannerBoxView"]) {
+            LABZeroFixedHeightConstraints(current);
+            break;
+        }
+        if ([name containsString:@"WalletAdvertiseCell"]) {
+            LABRecordWalletAdCell(adView);
+            break;
+        }
+        if ([current isKindOfClass:[UIWindow class]]) break;
+    }
 }
 
 static BOOL LABContainsAdDescendant(UIView *view) {
@@ -377,6 +439,105 @@ static void LABInstallChatTopBannerHooks(void) {
     }
 }
 
+static BOOL LABIsTrackedWalletLayout(UICollectionViewLayout *layout) {
+    return layout.collectionView && layout.collectionView == LABWalletCollectionView &&
+        LABWalletAdIndexPath && LABWalletAdHeight > 0.0;
+}
+
+static UICollectionViewLayoutAttributes *LABAdjustedWalletAttributes(
+    UICollectionViewLayoutAttributes *attributes) {
+    if (!attributes || !LABWalletAdIndexPath) return attributes;
+    UICollectionViewLayoutAttributes *adjusted = [attributes copy];
+    NSIndexPath *indexPath = adjusted.indexPath;
+    if (adjusted.representedElementCategory == UICollectionElementCategoryCell &&
+        indexPath.section == LABWalletAdIndexPath.section) {
+        CGRect frame = adjusted.frame;
+        if (indexPath.item == LABWalletAdIndexPath.item) {
+            frame.size.height = 0.0;
+        } else if (indexPath.item > LABWalletAdIndexPath.item) {
+            frame.origin.y -= LABWalletAdHeight;
+        }
+        adjusted.frame = frame;
+    }
+    return adjusted;
+}
+
+static NSArray<UICollectionViewLayoutAttributes *> *(*LAB_orig_walletLayoutAttributesInRect)(UICollectionViewLayout *, SEL, CGRect);
+static NSArray<UICollectionViewLayoutAttributes *> *LAB_walletLayoutAttributesInRect(
+    UICollectionViewLayout *self, SEL _cmd, CGRect rect) {
+    NSArray<UICollectionViewLayoutAttributes *> *attributes =
+        LAB_orig_walletLayoutAttributesInRect(self, _cmd, rect);
+    if (!LABIsTrackedWalletLayout(self)) return attributes;
+    NSMutableArray<UICollectionViewLayoutAttributes *> *adjusted =
+        [NSMutableArray arrayWithCapacity:attributes.count];
+    for (UICollectionViewLayoutAttributes *attribute in attributes) {
+        [adjusted addObject:LABAdjustedWalletAttributes(attribute)];
+    }
+    return adjusted;
+}
+
+static UICollectionViewLayoutAttributes *(*LAB_orig_walletLayoutAttributesForItem)(UICollectionViewLayout *, SEL, NSIndexPath *);
+static UICollectionViewLayoutAttributes *LAB_walletLayoutAttributesForItem(
+    UICollectionViewLayout *self, SEL _cmd, NSIndexPath *indexPath) {
+    UICollectionViewLayoutAttributes *attributes =
+        LAB_orig_walletLayoutAttributesForItem(self, _cmd, indexPath);
+    return LABIsTrackedWalletLayout(self) ? LABAdjustedWalletAttributes(attributes) : attributes;
+}
+
+static CGSize (*LAB_orig_walletCollectionContentSize)(UICollectionViewLayout *, SEL);
+static CGSize LAB_walletCollectionContentSize(UICollectionViewLayout *self, SEL _cmd) {
+    CGSize size = LAB_orig_walletCollectionContentSize(self, _cmd);
+    if (LABIsTrackedWalletLayout(self)) {
+        size.height = MAX(0.0, size.height - LABWalletAdHeight);
+    }
+    return size;
+}
+
+static void LABInstallWalletFlowLayoutHooks(void) {
+    Class layoutClass = LABClassNamedLike(@"WalletCollectionViewFlowLayout");
+    if (!layoutClass) return;
+
+    SEL elementsSelector = @selector(layoutAttributesForElementsInRect:);
+    Method elementsMethod = class_getInstanceMethod(layoutClass, elementsSelector);
+    if (elementsMethod) {
+        LAB_orig_walletLayoutAttributesInRect =
+            (NSArray<UICollectionViewLayoutAttributes *> *(*)(UICollectionViewLayout *, SEL, CGRect))
+            method_getImplementation(elementsMethod);
+        if (!class_addMethod(layoutClass, elementsSelector, (IMP)LAB_walletLayoutAttributesInRect,
+                             method_getTypeEncoding(elementsMethod))) {
+            LAB_orig_walletLayoutAttributesInRect =
+                (NSArray<UICollectionViewLayoutAttributes *> *(*)(UICollectionViewLayout *, SEL, CGRect))
+                method_setImplementation(elementsMethod, (IMP)LAB_walletLayoutAttributesInRect);
+        }
+    }
+
+    SEL itemSelector = @selector(layoutAttributesForItemAtIndexPath:);
+    Method itemMethod = class_getInstanceMethod(layoutClass, itemSelector);
+    if (itemMethod) {
+        LAB_orig_walletLayoutAttributesForItem =
+            (UICollectionViewLayoutAttributes *(*)(UICollectionViewLayout *, SEL, NSIndexPath *))
+            method_getImplementation(itemMethod);
+        if (!class_addMethod(layoutClass, itemSelector, (IMP)LAB_walletLayoutAttributesForItem,
+                             method_getTypeEncoding(itemMethod))) {
+            LAB_orig_walletLayoutAttributesForItem =
+                (UICollectionViewLayoutAttributes *(*)(UICollectionViewLayout *, SEL, NSIndexPath *))
+                method_setImplementation(itemMethod, (IMP)LAB_walletLayoutAttributesForItem);
+        }
+    }
+
+    SEL contentSizeSelector = @selector(collectionViewContentSize);
+    Method contentSizeMethod = class_getInstanceMethod(layoutClass, contentSizeSelector);
+    if (contentSizeMethod) {
+        LAB_orig_walletCollectionContentSize = (CGSize (*)(UICollectionViewLayout *, SEL))
+            method_getImplementation(contentSizeMethod);
+        if (!class_addMethod(layoutClass, contentSizeSelector, (IMP)LAB_walletCollectionContentSize,
+                             method_getTypeEncoding(contentSizeMethod))) {
+            LAB_orig_walletCollectionContentSize = (CGSize (*)(UICollectionViewLayout *, SEL))
+                method_setImplementation(contentSizeMethod, (IMP)LAB_walletCollectionContentSize);
+        }
+    }
+}
+
 // LINE sizes several ad slots before the view is attached to a window.  By
 // returning zero during that sizing phase, the collection/table layout does
 // not reserve an otherwise-empty banner row.
@@ -436,6 +597,7 @@ static void LABCollapseAdContainerChain(UIView *adView) {
 static void LABHideAdAndCollapse(UIView *view) {
     LABCollapseAdView(view);
     LABCollapseAdContainerChain(view);
+    LABCollapseKnownAdHost(view);
 }
 
 static void (*LAB_orig_addSubview)(UIView *, SEL, UIView *);
@@ -541,6 +703,7 @@ static void LINEAdBlockerInit(void) {
     LABInstallHomeBannerCellHooks();
     LABInstallWalletBannerCellHooks();
     LABInstallChatTopBannerHooks();
+    LABInstallWalletFlowLayoutHooks();
 
     // Some LineAdFeatureSupport views are created and attached before the
     // first addSubview hook is reached. Sweep only known ad SDK/module views
