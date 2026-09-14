@@ -68,6 +68,7 @@ static BOOL LABIsAdObject(id object) {
 
 static char LABCollapsedKey;
 static BOOL LABDidPresentDebugReport = NO;
+static const BOOL LABEnableDiagnostics = NO;
 
 static NSString *LABDebugChainForView(UIView *view) {
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
@@ -82,7 +83,7 @@ static NSString *LABDebugChainForView(UIView *view) {
 }
 
 static void LABPresentDebugReport(UIView *view) {
-    if (LABDidPresentDebugReport || !view.window) return;
+    if (!LABEnableDiagnostics || LABDidPresentDebugReport || !view.window) return;
     NSString *className = NSStringFromClass(view.class);
     // Home's container has already been identified and handled. Keep the
     // one-shot diagnostic available for the remaining Chat/Wallet surfaces.
@@ -131,6 +132,11 @@ static BOOL LABContainsAdDescendant(UIView *view) {
 
 static BOOL LABShouldUseZeroSize(UIView *view) {
     if (LABIsAdObject(view)) return YES;
+
+    if ([NSStringFromClass(view.class) containsString:@"TopBannerBoxView"] &&
+        LABContainsAdDescendant(view)) {
+        return YES;
+    }
 
     // LINE reserves its banner area as a self-sizing table/collection cell.
     // Collapse that cell only when its subtree contains a known ad view.
@@ -209,6 +215,125 @@ static void LABInstallHomeBannerCellHooks(void) {
             LAB_orig_homeCellSystemFittingSize =
                 (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
                 method_setImplementation(fittingMethod, (IMP)LAB_homeCellSystemFittingSize);
+        }
+    }
+}
+
+// Wallet uses a separate self-sizing collection cell for its banner.
+static UICollectionViewLayoutAttributes *(*LAB_orig_walletCellPreferredSize)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *);
+static UICollectionViewLayoutAttributes *LAB_walletCellPreferredSize(
+    UICollectionViewCell *self, SEL _cmd, UICollectionViewLayoutAttributes *attributes) {
+    if (LABContainsAdDescendant(self)) {
+        UICollectionViewLayoutAttributes *collapsed = [attributes copy];
+        collapsed.size = CGSizeMake(attributes.size.width, 0.0);
+        return collapsed;
+    }
+    return LAB_orig_walletCellPreferredSize(self, _cmd, attributes);
+}
+
+static CGSize (*LAB_orig_walletCellSystemFittingSize)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority);
+static CGSize LAB_walletCellSystemFittingSize(UIView *self, SEL _cmd, CGSize size,
+                                              UILayoutPriority horizontal,
+                                              UILayoutPriority vertical) {
+    return LABContainsAdDescendant(self) ? CGSizeZero :
+        LAB_orig_walletCellSystemFittingSize(self, _cmd, size, horizontal, vertical);
+}
+
+static void LABInstallWalletBannerCellHooks(void) {
+    Class cellClass = LABClassNamedLike(@"WalletAdvertiseCell");
+    if (!cellClass) return;
+
+    SEL preferredSelector = @selector(preferredLayoutAttributesFittingAttributes:);
+    Method preferredMethod = class_getInstanceMethod(cellClass, preferredSelector);
+    if (preferredMethod) {
+        LAB_orig_walletCellPreferredSize =
+            (UICollectionViewLayoutAttributes *(*)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *))
+            method_getImplementation(preferredMethod);
+        if (!class_addMethod(cellClass, preferredSelector, (IMP)LAB_walletCellPreferredSize,
+                             method_getTypeEncoding(preferredMethod))) {
+            LAB_orig_walletCellPreferredSize =
+                (UICollectionViewLayoutAttributes *(*)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *))
+                method_setImplementation(preferredMethod, (IMP)LAB_walletCellPreferredSize);
+        }
+    }
+
+    SEL fittingSelector =
+        @selector(systemLayoutSizeFittingSize:withHorizontalFittingPriority:verticalFittingPriority:);
+    Method fittingMethod = class_getInstanceMethod(cellClass, fittingSelector);
+    if (fittingMethod) {
+        LAB_orig_walletCellSystemFittingSize =
+            (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+            method_getImplementation(fittingMethod);
+        if (!class_addMethod(cellClass, fittingSelector, (IMP)LAB_walletCellSystemFittingSize,
+                             method_getTypeEncoding(fittingMethod))) {
+            LAB_orig_walletCellSystemFittingSize =
+                (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+                method_setImplementation(fittingMethod, (IMP)LAB_walletCellSystemFittingSize);
+        }
+    }
+}
+
+// Chat's banner lives in a standalone container rather than a cell.
+static CGSize (*LAB_orig_topBannerIntrinsicSize)(UIView *, SEL);
+static CGSize LAB_topBannerIntrinsicSize(UIView *self, SEL _cmd) {
+    return LABContainsAdDescendant(self) ? CGSizeZero :
+        LAB_orig_topBannerIntrinsicSize(self, _cmd);
+}
+
+static CGSize (*LAB_orig_topBannerSizeThatFits)(UIView *, SEL, CGSize);
+static CGSize LAB_topBannerSizeThatFits(UIView *self, SEL _cmd, CGSize size) {
+    return LABContainsAdDescendant(self) ? CGSizeZero :
+        LAB_orig_topBannerSizeThatFits(self, _cmd, size);
+}
+
+static CGSize (*LAB_orig_topBannerSystemFittingSize)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority);
+static CGSize LAB_topBannerSystemFittingSize(UIView *self, SEL _cmd, CGSize size,
+                                             UILayoutPriority horizontal,
+                                             UILayoutPriority vertical) {
+    return LABContainsAdDescendant(self) ? CGSizeZero :
+        LAB_orig_topBannerSystemFittingSize(self, _cmd, size, horizontal, vertical);
+}
+
+static void LABInstallChatTopBannerHooks(void) {
+    Class bannerClass = LABClassNamedLike(@"TopBannerBoxView");
+    if (!bannerClass) return;
+
+    SEL intrinsicSelector = @selector(intrinsicContentSize);
+    Method intrinsicMethod = class_getInstanceMethod(bannerClass, intrinsicSelector);
+    if (intrinsicMethod) {
+        LAB_orig_topBannerIntrinsicSize = (CGSize (*)(UIView *, SEL))
+            method_getImplementation(intrinsicMethod);
+        if (!class_addMethod(bannerClass, intrinsicSelector, (IMP)LAB_topBannerIntrinsicSize,
+                             method_getTypeEncoding(intrinsicMethod))) {
+            LAB_orig_topBannerIntrinsicSize = (CGSize (*)(UIView *, SEL))
+                method_setImplementation(intrinsicMethod, (IMP)LAB_topBannerIntrinsicSize);
+        }
+    }
+
+    SEL sizeSelector = @selector(sizeThatFits:);
+    Method sizeMethod = class_getInstanceMethod(bannerClass, sizeSelector);
+    if (sizeMethod) {
+        LAB_orig_topBannerSizeThatFits = (CGSize (*)(UIView *, SEL, CGSize))
+            method_getImplementation(sizeMethod);
+        if (!class_addMethod(bannerClass, sizeSelector, (IMP)LAB_topBannerSizeThatFits,
+                             method_getTypeEncoding(sizeMethod))) {
+            LAB_orig_topBannerSizeThatFits = (CGSize (*)(UIView *, SEL, CGSize))
+                method_setImplementation(sizeMethod, (IMP)LAB_topBannerSizeThatFits);
+        }
+    }
+
+    SEL fittingSelector =
+        @selector(systemLayoutSizeFittingSize:withHorizontalFittingPriority:verticalFittingPriority:);
+    Method fittingMethod = class_getInstanceMethod(bannerClass, fittingSelector);
+    if (fittingMethod) {
+        LAB_orig_topBannerSystemFittingSize =
+            (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+            method_getImplementation(fittingMethod);
+        if (!class_addMethod(bannerClass, fittingSelector, (IMP)LAB_topBannerSystemFittingSize,
+                             method_getTypeEncoding(fittingMethod))) {
+            LAB_orig_topBannerSystemFittingSize =
+                (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+                method_setImplementation(fittingMethod, (IMP)LAB_topBannerSystemFittingSize);
         }
     }
 }
@@ -375,6 +500,8 @@ static void LINEAdBlockerInit(void) {
     }
 
     LABInstallHomeBannerCellHooks();
+    LABInstallWalletBannerCellHooks();
+    LABInstallChatTopBannerHooks();
 
     // Some LineAdFeatureSupport views are created and attached before the
     // first addSubview hook is reached. Sweep only known ad SDK/module views
