@@ -66,7 +66,6 @@ static BOOL LABIsAdObject(id object) {
 }
 
 static char LABCollapsedKey;
-static char LABZeroHeightKey;
 
 // Hiding a view removes its pixels, but Auto Layout still reserves the view's
 // old height.  Collapse only constraints that directly reference the ad view,
@@ -82,23 +81,33 @@ static void LABCollapseAdView(UIView *view) {
     [view invalidateIntrinsicContentSize];
     [view.superview setNeedsLayout];
 
-    // Keep LINE's original constraints intact, but add a low-conflict
-    // zero-height constraint so fixed ad slots can collapse naturally.
-    if (!objc_getAssociatedObject(view, &LABZeroHeightKey) &&
-        !view.translatesAutoresizingMaskIntoConstraints) {
-        NSLayoutConstraint *zeroHeight =
-            [NSLayoutConstraint constraintWithItem:view
-                                         attribute:NSLayoutAttributeHeight
-                                         relatedBy:NSLayoutRelationEqual
-                                            toItem:nil
-                                         attribute:NSLayoutAttributeNotAnAttribute
-                                        multiplier:1.0
-                                          constant:0.0];
-        zeroHeight.priority = 999.0;
-        [view addConstraint:zeroHeight];
-        objc_setAssociatedObject(view, &LABZeroHeightKey, zeroHeight,
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+}
+
+// LINE sizes several ad slots before the view is attached to a window.  By
+// returning zero during that sizing phase, the collection/table layout does
+// not reserve an otherwise-empty banner row.
+static CGSize (*LAB_orig_intrinsicContentSize)(UIView *, SEL);
+static CGSize LAB_intrinsicContentSize(UIView *self, SEL _cmd) {
+    return LABIsAdObject(self) ? CGSizeZero : LAB_orig_intrinsicContentSize(self, _cmd);
+}
+
+static CGSize (*LAB_orig_sizeThatFits)(UIView *, SEL, CGSize);
+static CGSize LAB_sizeThatFits(UIView *self, SEL _cmd, CGSize size) {
+    return LABIsAdObject(self) ? CGSizeZero : LAB_orig_sizeThatFits(self, _cmd, size);
+}
+
+static CGSize (*LAB_orig_systemLayoutSizeFittingSize)(UIView *, SEL, CGSize);
+static CGSize LAB_systemLayoutSizeFittingSize(UIView *self, SEL _cmd, CGSize size) {
+    return LABIsAdObject(self) ? CGSizeZero :
+        LAB_orig_systemLayoutSizeFittingSize(self, _cmd, size);
+}
+
+static CGSize (*LAB_orig_systemLayoutSizeFittingSizeWithPriority)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority);
+static CGSize LAB_systemLayoutSizeFittingSizeWithPriority(UIView *self, SEL _cmd, CGSize size,
+                                                           UILayoutPriority horizontal,
+                                                           UILayoutPriority vertical) {
+    return LABIsAdObject(self) ? CGSizeZero :
+        LAB_orig_systemLayoutSizeFittingSizeWithPriority(self, _cmd, size, horizontal, vertical);
 }
 
 static void LABCollapseAdContainerChain(UIView *adView) {
@@ -190,6 +199,13 @@ static void LINEAdBlockerInit(void) {
     if (viewClass) {
         Method addSubview = class_getInstanceMethod(viewClass, @selector(addSubview:));
         Method didMoveToWindow = class_getInstanceMethod(viewClass, @selector(didMoveToWindow));
+        Method intrinsicContentSize = class_getInstanceMethod(viewClass, @selector(intrinsicContentSize));
+        Method sizeThatFits = class_getInstanceMethod(viewClass, @selector(sizeThatFits:));
+        Method systemLayoutSizeFittingSize =
+            class_getInstanceMethod(viewClass, @selector(systemLayoutSizeFittingSize:));
+        Method systemLayoutSizeFittingSizeWithPriority = class_getInstanceMethod(
+            viewClass,
+            @selector(systemLayoutSizeFittingSize:withHorizontalFittingPriority:verticalFittingPriority:));
         if (addSubview) {
             LAB_orig_addSubview = (void (*)(UIView *, SEL, UIView *))
                 method_setImplementation(addSubview, (IMP)LAB_addSubview);
@@ -197,6 +213,25 @@ static void LINEAdBlockerInit(void) {
         if (didMoveToWindow) {
             LAB_orig_didMoveToWindow = (void (*)(UIView *, SEL))
                 method_setImplementation(didMoveToWindow, (IMP)LAB_didMoveToWindow);
+        }
+        if (intrinsicContentSize) {
+            LAB_orig_intrinsicContentSize = (CGSize (*)(UIView *, SEL))
+                method_setImplementation(intrinsicContentSize, (IMP)LAB_intrinsicContentSize);
+        }
+        if (sizeThatFits) {
+            LAB_orig_sizeThatFits = (CGSize (*)(UIView *, SEL, CGSize))
+                method_setImplementation(sizeThatFits, (IMP)LAB_sizeThatFits);
+        }
+        if (systemLayoutSizeFittingSize) {
+            LAB_orig_systemLayoutSizeFittingSize = (CGSize (*)(UIView *, SEL, CGSize))
+                method_setImplementation(systemLayoutSizeFittingSize,
+                                         (IMP)LAB_systemLayoutSizeFittingSize);
+        }
+        if (systemLayoutSizeFittingSizeWithPriority) {
+            LAB_orig_systemLayoutSizeFittingSizeWithPriority =
+                (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+                method_setImplementation(systemLayoutSizeFittingSizeWithPriority,
+                                         (IMP)LAB_systemLayoutSizeFittingSizeWithPriority);
         }
     }
     if (controllerClass) {
