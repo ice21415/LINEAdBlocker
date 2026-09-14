@@ -2,6 +2,6 @@ Origin: LINEAdBlocker
 Label: LINEAdBlocker
 Suite: stable
 Codename: stable
-Architectures: iphoneos-arm
+Architectures: iphoneos-arm iphoneos-arm64 iphoneos-arm64e
 Components: main
 Description: LINEAdBlocker Sileo repository
