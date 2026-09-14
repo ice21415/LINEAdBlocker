@@ -67,8 +67,8 @@ static BOOL LABIsAdObject(id object) {
 
 static void (*LAB_orig_addSubview)(UIView *, SEL, UIView *);
 static void LAB_addSubview(UIView *self, SEL _cmd, UIView *view) {
-    if (LABIsAdObject(view)) return;
     LAB_orig_addSubview(self, _cmd, view);
+    if (LABIsAdObject(view)) view.hidden = YES;
 }
 
 static void (*LAB_orig_didMoveToWindow)(UIView *, SEL);
@@ -76,7 +76,6 @@ static void LAB_didMoveToWindow(UIView *self, SEL _cmd) {
     LAB_orig_didMoveToWindow(self, _cmd);
     if (LABIsAdObject(self)) {
         self.hidden = YES;
-        [self removeFromSuperview];
     }
 }
 
@@ -93,7 +92,7 @@ static void LAB_present(UIViewController *self, SEL _cmd, UIViewController *vc,
 static void LABRemoveAdViews(UIView *view) {
     for (UIView *child in [view.subviews copy]) {
         if (LABIsAdObject(child)) {
-            [child removeFromSuperview];
+            child.hidden = YES;
         } else {
             LABRemoveAdViews(child);
         }
