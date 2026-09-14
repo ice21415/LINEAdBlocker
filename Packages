@@ -91,3 +91,17 @@ Description: Suppresses LINE first-party and Google ad views.
 Author: local
 Name: LINE AdBlocker
 
+Package: com.example.lineadblocker
+Version: 0.1.4
+Architecture: iphoneos-arm64e
+Maintainer: local
+Filename: debs/com.example.lineadblocker_0.1.4_iphoneos-arm64e.deb
+Size: 7456
+MD5sum: 2080551da675058dacab310af4194dd4
+SHA1: f47d766f561de63a7f5030b5f7166e6e0d16d054
+SHA256: 1778d30fbb4c7640f68ceb76433563f30116cea025bd7f44f0655d889f38fcad
+Section: Tweaks
+Description: Suppresses LINE first-party and Google ad views.
+Author: local
+Name: LINE AdBlocker
+

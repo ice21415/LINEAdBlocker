@@ -9,6 +9,7 @@ static BOOL LABClassNameIsAd(NSString *name) {
     NSArray<NSString *> *exactOrPrefix = @[
         @"LAD",
         @"LineAdvertise",
+        @"LineAdFeatureSupport",
         @"AdHome",
         @"AdTimeline",
         @"AdWallet",
@@ -89,6 +90,26 @@ static void LAB_present(UIViewController *self, SEL _cmd, UIViewController *vc,
     LAB_orig_present(self, _cmd, vc, animated, completion);
 }
 
+static void LABRemoveAdViews(UIView *view) {
+    for (UIView *child in [view.subviews copy]) {
+        if (LABIsAdObject(child)) {
+            [child removeFromSuperview];
+        } else {
+            LABRemoveAdViews(child);
+        }
+    }
+}
+
+static void LABSweepWindows(void) {
+    UIApplication *application = UIApplication.sharedApplication;
+    for (UIScene *scene in application.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            LABRemoveAdViews(window);
+        }
+    }
+}
+
 __attribute__((constructor))
 static void LINEAdBlockerInit(void) {
     Class viewClass = objc_getClass("UIView");
@@ -113,4 +134,15 @@ static void LINEAdBlockerInit(void) {
                 method_setImplementation(present, (IMP)LAB_present);
         }
     }
+
+    // Some LineAdFeatureSupport views are created and attached before the
+    // first addSubview hook is reached. Sweep only known ad SDK/module views
+    // on the main thread so those already-present surfaces are removed too.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSTimer scheduledTimerWithTimeInterval:0.5
+                                         repeats:YES
+                                           block:^(__unused NSTimer *timer) {
+            LABSweepWindows();
+        }];
+    });
 }
