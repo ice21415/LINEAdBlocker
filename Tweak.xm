@@ -66,6 +66,7 @@ static BOOL LABIsAdObject(id object) {
 }
 
 static char LABCollapsedKey;
+static char LABZeroHeightKey;
 
 // Hiding a view removes its pixels, but Auto Layout still reserves the view's
 // old height.  Collapse only constraints that directly reference the ad view,
@@ -80,6 +81,24 @@ static void LABCollapseAdView(UIView *view) {
     view.userInteractionEnabled = NO;
     [view invalidateIntrinsicContentSize];
     [view.superview setNeedsLayout];
+
+    // Keep LINE's original constraints intact, but add a low-conflict
+    // zero-height constraint so fixed ad slots can collapse naturally.
+    if (!objc_getAssociatedObject(view, &LABZeroHeightKey) &&
+        !view.translatesAutoresizingMaskIntoConstraints) {
+        NSLayoutConstraint *zeroHeight =
+            [NSLayoutConstraint constraintWithItem:view
+                                         attribute:NSLayoutAttributeHeight
+                                         relatedBy:NSLayoutRelationEqual
+                                            toItem:nil
+                                         attribute:NSLayoutAttributeNotAnAttribute
+                                        multiplier:1.0
+                                          constant:0.0];
+        zeroHeight.priority = 999.0;
+        [view addConstraint:zeroHeight];
+        objc_setAssociatedObject(view, &LABZeroHeightKey, zeroHeight,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
 
 static void LABCollapseAdContainerChain(UIView *adView) {
