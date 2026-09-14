@@ -70,6 +70,7 @@ static char LABCollapsedKey;
 static BOOL LABDidPresentDebugReport = NO;
 static const BOOL LABEnableDiagnostics = NO;
 static BOOL LABDidPresentNetworkReport = NO;
+static const BOOL LABEnableNetworkDiagnostics = NO;
 static char LABFixedHeightCollapsedKey;
 static __weak UICollectionView *LABWalletCollectionView;
 static NSIndexPath *LABWalletAdIndexPath;
@@ -159,6 +160,12 @@ static BOOL LABIsPotentialAdRequest(NSURL *URL) {
            [value containsString:@"/ad/"];
 }
 
+static BOOL LABShouldBlockAdRequest(NSURL *URL) {
+    if (!URL) return NO;
+    return [URL.host.lowercaseString isEqualToString:@"legy.line-apps.com"] &&
+        [URL.path.lowercaseString hasPrefix:@"/smartch/banner/"];
+}
+
 static void LABPresentNetworkReport(NSURL *URL) {
     if (LABDidPresentNetworkReport || !URL) return;
     LABDidPresentNetworkReport = YES;
@@ -189,7 +196,14 @@ static NSURLSessionDataTask *(*LAB_orig_dataTaskWithRequest)(NSURLSession *, SEL
 static NSURLSessionDataTask *LAB_dataTaskWithRequest(NSURLSession *self, SEL _cmd,
                                                       NSURLRequest *request,
                                                       void (^completion)(NSData *, NSURLResponse *, NSError *)) {
-    if (LABIsPotentialAdRequest(request.URL)) LABPresentNetworkReport(request.URL);
+    if (LABShouldBlockAdRequest(request.URL)) {
+        NSMutableURLRequest *blockedRequest = [request mutableCopy];
+        blockedRequest.URL = [NSURL URLWithString:@"http://127.0.0.1:9/lineadblocker"];
+        return LAB_orig_dataTaskWithRequest(self, _cmd, blockedRequest, completion);
+    }
+    if (LABEnableNetworkDiagnostics && LABIsPotentialAdRequest(request.URL)) {
+        LABPresentNetworkReport(request.URL);
+    }
     return LAB_orig_dataTaskWithRequest(self, _cmd, request, completion);
 }
 
