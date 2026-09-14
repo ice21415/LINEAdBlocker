@@ -83,22 +83,41 @@ static void LABCollapseAdView(UIView *view) {
 
 }
 
+static BOOL LABContainsAdDescendant(UIView *view) {
+    for (UIView *child in view.subviews) {
+        if (LABIsAdObject(child) || LABContainsAdDescendant(child)) return YES;
+    }
+    return NO;
+}
+
+static BOOL LABShouldUseZeroSize(UIView *view) {
+    if (LABIsAdObject(view)) return YES;
+
+    // LINE reserves its banner area as a self-sizing table/collection cell.
+    // Collapse that cell only when its subtree contains a known ad view.
+    if ([view isKindOfClass:[UITableViewCell class]] ||
+        [view isKindOfClass:[UICollectionReusableView class]]) {
+        return LABContainsAdDescendant(view);
+    }
+    return NO;
+}
+
 // LINE sizes several ad slots before the view is attached to a window.  By
 // returning zero during that sizing phase, the collection/table layout does
 // not reserve an otherwise-empty banner row.
 static CGSize (*LAB_orig_intrinsicContentSize)(UIView *, SEL);
 static CGSize LAB_intrinsicContentSize(UIView *self, SEL _cmd) {
-    return LABIsAdObject(self) ? CGSizeZero : LAB_orig_intrinsicContentSize(self, _cmd);
+    return LABShouldUseZeroSize(self) ? CGSizeZero : LAB_orig_intrinsicContentSize(self, _cmd);
 }
 
 static CGSize (*LAB_orig_sizeThatFits)(UIView *, SEL, CGSize);
 static CGSize LAB_sizeThatFits(UIView *self, SEL _cmd, CGSize size) {
-    return LABIsAdObject(self) ? CGSizeZero : LAB_orig_sizeThatFits(self, _cmd, size);
+    return LABShouldUseZeroSize(self) ? CGSizeZero : LAB_orig_sizeThatFits(self, _cmd, size);
 }
 
 static CGSize (*LAB_orig_systemLayoutSizeFittingSize)(UIView *, SEL, CGSize);
 static CGSize LAB_systemLayoutSizeFittingSize(UIView *self, SEL _cmd, CGSize size) {
-    return LABIsAdObject(self) ? CGSizeZero :
+    return LABShouldUseZeroSize(self) ? CGSizeZero :
         LAB_orig_systemLayoutSizeFittingSize(self, _cmd, size);
 }
 
@@ -106,7 +125,7 @@ static CGSize (*LAB_orig_systemLayoutSizeFittingSizeWithPriority)(UIView *, SEL,
 static CGSize LAB_systemLayoutSizeFittingSizeWithPriority(UIView *self, SEL _cmd, CGSize size,
                                                            UILayoutPriority horizontal,
                                                            UILayoutPriority vertical) {
-    return LABIsAdObject(self) ? CGSizeZero :
+    return LABShouldUseZeroSize(self) ? CGSizeZero :
         LAB_orig_systemLayoutSizeFittingSizeWithPriority(self, _cmd, size, horizontal, vertical);
 }
 
