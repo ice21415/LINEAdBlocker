@@ -65,17 +65,53 @@ static BOOL LABIsAdObject(id object) {
     return NO;
 }
 
+static char LABCollapsedKey;
+
+// Hiding a view removes its pixels, but Auto Layout still reserves the view's
+// old height.  Collapse only constraints that directly reference the ad view,
+// then leave the view in the hierarchy so LINE's layout engine stays stable.
+static void LABCollapseAdView(UIView *view) {
+    if (!view || objc_getAssociatedObject(view, &LABCollapsedKey)) return;
+    objc_setAssociatedObject(view, &LABCollapsedKey, @YES,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
+    for (NSLayoutConstraint *constraint in view.constraints) {
+        if (constraint.firstItem == view || constraint.secondItem == view) {
+            [constraints addObject:constraint];
+        }
+    }
+    for (NSLayoutConstraint *constraint in view.superview.constraints) {
+        if (constraint.firstItem == view || constraint.secondItem == view) {
+            [constraints addObject:constraint];
+        }
+    }
+    if (constraints.count) {
+        [NSLayoutConstraint deactivateConstraints:constraints];
+    }
+
+    view.hidden = YES;
+    view.alpha = 0.0;
+    view.userInteractionEnabled = NO;
+    view.translatesAutoresizingMaskIntoConstraints = YES;
+    view.frame = CGRectZero;
+}
+
 static void (*LAB_orig_addSubview)(UIView *, SEL, UIView *);
 static void LAB_addSubview(UIView *self, SEL _cmd, UIView *view) {
     LAB_orig_addSubview(self, _cmd, view);
-    if (LABIsAdObject(view)) view.hidden = YES;
+    if (LABIsAdObject(view)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            LABCollapseAdView(view);
+        });
+    }
 }
 
 static void (*LAB_orig_didMoveToWindow)(UIView *, SEL);
 static void LAB_didMoveToWindow(UIView *self, SEL _cmd) {
     LAB_orig_didMoveToWindow(self, _cmd);
     if (LABIsAdObject(self)) {
-        self.hidden = YES;
+        LABCollapseAdView(self);
     }
 }
 
@@ -92,7 +128,7 @@ static void LAB_present(UIViewController *self, SEL _cmd, UIViewController *vc,
 static void LABRemoveAdViews(UIView *view) {
     for (UIView *child in [view.subviews copy]) {
         if (LABIsAdObject(child)) {
-            child.hidden = YES;
+            LABCollapseAdView(child);
         } else {
             LABRemoveAdViews(child);
         }
