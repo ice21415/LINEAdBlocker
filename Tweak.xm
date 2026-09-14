@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <stdlib.h>
 
 static BOOL LABClassNameIsAd(NSString *name) {
     if (name.length == 0) return NO;
@@ -134,6 +135,78 @@ static BOOL LABShouldUseZeroSize(UIView *view) {
         return LABContainsAdDescendant(view);
     }
     return NO;
+}
+
+static Class LABClassNamedLike(NSString *fragment) {
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return Nil;
+    Class *classes = (Class *)calloc((size_t)count, sizeof(Class));
+    count = objc_getClassList(classes, count);
+    Class result = Nil;
+    for (int i = 0; i < count; i++) {
+        if ([NSStringFromClass(classes[i]) containsString:fragment]) {
+            result = classes[i];
+            break;
+        }
+    }
+    free(classes);
+    return result;
+}
+
+// Home banners are hosted by a custom collection cell which overrides UIKit's
+// normal fitting path. Hook that concrete cell so its 344-point placeholder is
+// never returned to the home collection layout once it contains an ad.
+static UICollectionViewLayoutAttributes *(*LAB_orig_homeCellPreferredSize)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *);
+static UICollectionViewLayoutAttributes *LAB_homeCellPreferredSize(
+    UICollectionViewCell *self, SEL _cmd, UICollectionViewLayoutAttributes *attributes) {
+    if (LABContainsAdDescendant(self)) {
+        UICollectionViewLayoutAttributes *collapsed = [attributes copy];
+        collapsed.size = CGSizeMake(attributes.size.width, 0.0);
+        return collapsed;
+    }
+    return LAB_orig_homeCellPreferredSize(self, _cmd, attributes);
+}
+
+static CGSize (*LAB_orig_homeCellSystemFittingSize)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority);
+static CGSize LAB_homeCellSystemFittingSize(UIView *self, SEL _cmd, CGSize size,
+                                            UILayoutPriority horizontal,
+                                            UILayoutPriority vertical) {
+    return LABContainsAdDescendant(self) ? CGSizeZero :
+        LAB_orig_homeCellSystemFittingSize(self, _cmd, size, horizontal, vertical);
+}
+
+static void LABInstallHomeBannerCellHooks(void) {
+    Class cellClass = LABClassNamedLike(@"GCSHomeTabCommonCell");
+    if (!cellClass) return;
+
+    SEL preferredSelector = @selector(preferredLayoutAttributesFittingAttributes:);
+    Method preferredMethod = class_getInstanceMethod(cellClass, preferredSelector);
+    if (preferredMethod) {
+        LAB_orig_homeCellPreferredSize =
+            (UICollectionViewLayoutAttributes *(*)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *))
+            method_getImplementation(preferredMethod);
+        if (!class_addMethod(cellClass, preferredSelector, (IMP)LAB_homeCellPreferredSize,
+                             method_getTypeEncoding(preferredMethod))) {
+            LAB_orig_homeCellPreferredSize =
+                (UICollectionViewLayoutAttributes *(*)(UICollectionViewCell *, SEL, UICollectionViewLayoutAttributes *))
+                method_setImplementation(preferredMethod, (IMP)LAB_homeCellPreferredSize);
+        }
+    }
+
+    SEL fittingSelector =
+        @selector(systemLayoutSizeFittingSize:withHorizontalFittingPriority:verticalFittingPriority:);
+    Method fittingMethod = class_getInstanceMethod(cellClass, fittingSelector);
+    if (fittingMethod) {
+        LAB_orig_homeCellSystemFittingSize =
+            (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+            method_getImplementation(fittingMethod);
+        if (!class_addMethod(cellClass, fittingSelector, (IMP)LAB_homeCellSystemFittingSize,
+                             method_getTypeEncoding(fittingMethod))) {
+            LAB_orig_homeCellSystemFittingSize =
+                (CGSize (*)(UIView *, SEL, CGSize, UILayoutPriority, UILayoutPriority))
+                method_setImplementation(fittingMethod, (IMP)LAB_homeCellSystemFittingSize);
+        }
+    }
 }
 
 // LINE sizes several ad slots before the view is attached to a window.  By
@@ -296,6 +369,8 @@ static void LINEAdBlockerInit(void) {
                 method_setImplementation(present, (IMP)LAB_present);
         }
     }
+
+    LABInstallHomeBannerCellHooks();
 
     // Some LineAdFeatureSupport views are created and attached before the
     // first addSubview hook is reached. Sweep only known ad SDK/module views
