@@ -83,6 +83,10 @@ static NSString *LABDebugChainForView(UIView *view) {
 
 static void LABPresentDebugReport(UIView *view) {
     if (LABDidPresentDebugReport || !view.window) return;
+    NSString *className = NSStringFromClass(view.class);
+    // Home's container has already been identified and handled. Keep the
+    // one-shot diagnostic available for the remaining Chat/Wallet surfaces.
+    if ([className containsString:@"LADHome"] || [className containsString:@"AdHome"]) return;
     LABDidPresentDebugReport = YES;
     NSString *report = LABDebugChainForView(view);
     dispatch_async(dispatch_get_main_queue(), ^{
