@@ -66,6 +66,40 @@ static BOOL LABIsAdObject(id object) {
 }
 
 static char LABCollapsedKey;
+static BOOL LABDidPresentDebugReport = NO;
+
+static NSString *LABDebugChainForView(UIView *view) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    UIView *current = view;
+    for (NSUInteger depth = 0; current && depth < 7; depth++, current = current.superview) {
+        CGRect frame = current.frame;
+        [lines addObject:[NSString stringWithFormat:@"%lu. %@  %.0f×%.0f",
+                          (unsigned long)depth, NSStringFromClass(current.class),
+                          frame.size.width, frame.size.height]];
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+static void LABPresentDebugReport(UIView *view) {
+    if (LABDidPresentDebugReport || !view.window) return;
+    LABDidPresentDebugReport = YES;
+    NSString *report = LABDebugChainForView(view);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *controller = view.window.rootViewController;
+        while (controller.presentedViewController) {
+            controller = controller.presentedViewController;
+        }
+        if (!controller) return;
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"LINEAdBlocker 診斷"
+                             message:report
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"確定"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [controller presentViewController:alert animated:YES completion:nil];
+    });
+}
 
 // Hiding a view removes its pixels, but Auto Layout still reserves the view's
 // old height.  Collapse only constraints that directly reference the ad view,
@@ -194,6 +228,7 @@ static void LAB_present(UIViewController *self, SEL _cmd, UIViewController *vc,
 static void LABRemoveAdViews(UIView *view) {
     for (UIView *child in [view.subviews copy]) {
         if (LABIsAdObject(child)) {
+            LABPresentDebugReport(child);
             LABHideAdAndCollapse(child);
         } else {
             LABRemoveAdViews(child);
