@@ -1,9 +1,8 @@
 Package: com.example.lineadblocker
 Name: LINE AdBlocker
-Version: 0.1.2
+Version: 0.1.3
 Architecture: iphoneos-arm
 Description: Suppresses LINE first-party and Google ad views.
 Maintainer: local
 Author: local
 Section: Tweaks
-Depends: mobilesubstrate

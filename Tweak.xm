@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <substrate.h>
 
 static BOOL LABClassNameIsAd(NSString *name) {
     if (name.length == 0) return NO;
@@ -95,14 +94,23 @@ static void LINEAdBlockerInit(void) {
     Class viewClass = objc_getClass("UIView");
     Class controllerClass = objc_getClass("UIViewController");
     if (viewClass) {
-        MSHookMessageEx(viewClass, @selector(addSubview:),
-                        (IMP)LAB_addSubview, (IMP *)&LAB_orig_addSubview);
-        MSHookMessageEx(viewClass, @selector(didMoveToWindow),
-                        (IMP)LAB_didMoveToWindow, (IMP *)&LAB_orig_didMoveToWindow);
+        Method addSubview = class_getInstanceMethod(viewClass, @selector(addSubview:));
+        Method didMoveToWindow = class_getInstanceMethod(viewClass, @selector(didMoveToWindow));
+        if (addSubview) {
+            LAB_orig_addSubview = (void (*)(UIView *, SEL, UIView *))
+                method_setImplementation(addSubview, (IMP)LAB_addSubview);
+        }
+        if (didMoveToWindow) {
+            LAB_orig_didMoveToWindow = (void (*)(UIView *, SEL))
+                method_setImplementation(didMoveToWindow, (IMP)LAB_didMoveToWindow);
+        }
     }
     if (controllerClass) {
-        MSHookMessageEx(controllerClass,
-                        @selector(presentViewController:animated:completion:),
-                        (IMP)LAB_present, (IMP *)&LAB_orig_present);
+        Method present = class_getInstanceMethod(
+            controllerClass, @selector(presentViewController:animated:completion:));
+        if (present) {
+            LAB_orig_present = (void (*)(UIViewController *, SEL, UIViewController *, BOOL, void (^)(void)))
+                method_setImplementation(present, (IMP)LAB_present);
+        }
     }
 }

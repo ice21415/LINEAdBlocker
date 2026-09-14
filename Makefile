@@ -8,7 +8,6 @@ LINEAdBlocker_FILES = Tweak.xm
 LINEAdBlocker_CFLAGS = -fobjc-arc
 LINEAdBlocker_FRAMEWORKS = UIKit
 LINEAdBlocker_PRIVATE_FRAMEWORKS = Foundation
-LINEAdBlocker_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
