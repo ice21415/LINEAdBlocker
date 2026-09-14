@@ -68,7 +68,7 @@ static BOOL LABIsAdObject(id object) {
 
 static char LABCollapsedKey;
 static BOOL LABDidPresentDebugReport = NO;
-static const BOOL LABEnableDiagnostics = NO;
+static const BOOL LABEnableDiagnostics = YES;
 
 static NSString *LABDebugChainForView(UIView *view) {
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
@@ -82,6 +82,44 @@ static NSString *LABDebugChainForView(UIView *view) {
     return [lines componentsJoinedByString:@"\n"];
 }
 
+static NSString *LABDebugLayoutDetailsForView(UIView *view) {
+    NSMutableArray<NSString *> *details = [NSMutableArray array];
+    UIView *current = view;
+    UICollectionViewCell *cell = nil;
+    UICollectionView *collectionView = nil;
+    for (NSUInteger depth = 0; current && depth < 7; depth++, current = current.superview) {
+        if (!cell && [current isKindOfClass:[UICollectionViewCell class]]) {
+            cell = (UICollectionViewCell *)current;
+        }
+        if (!collectionView && [current isKindOfClass:[UICollectionView class]]) {
+            collectionView = (UICollectionView *)current;
+        }
+    }
+    if (cell && collectionView) {
+        NSIndexPath *indexPath = [collectionView indexPathForCell:cell];
+        [details addObject:[NSString stringWithFormat:@"cell index: %@\nlayout: %@",
+                            indexPath ?: @"(not visible)",
+                            NSStringFromClass(collectionView.collectionViewLayout.class)]];
+    }
+
+    for (NSLayoutConstraint *constraint in view.constraints) {
+        if (constraint.firstAttribute == NSLayoutAttributeHeight ||
+            constraint.secondAttribute == NSLayoutAttributeHeight) {
+            [details addObject:[NSString stringWithFormat:@"self H: %.0f p%.0f",
+                                constraint.constant, constraint.priority]];
+        }
+    }
+    for (NSLayoutConstraint *constraint in view.superview.constraints) {
+        if ((constraint.firstItem == view || constraint.secondItem == view) &&
+            (constraint.firstAttribute == NSLayoutAttributeHeight ||
+             constraint.secondAttribute == NSLayoutAttributeHeight)) {
+            [details addObject:[NSString stringWithFormat:@"parent H: %.0f p%.0f",
+                                constraint.constant, constraint.priority]];
+        }
+    }
+    return details.count ? [details componentsJoinedByString:@"\n"] : @"no direct height constraint";
+}
+
 static void LABPresentDebugReport(UIView *view) {
     if (!LABEnableDiagnostics || LABDidPresentDebugReport || !view.window) return;
     NSString *className = NSStringFromClass(view.class);
@@ -89,7 +127,8 @@ static void LABPresentDebugReport(UIView *view) {
     // one-shot diagnostic available for the remaining Chat/Wallet surfaces.
     if ([className containsString:@"LADHome"] || [className containsString:@"AdHome"]) return;
     LABDidPresentDebugReport = YES;
-    NSString *report = LABDebugChainForView(view);
+    NSString *report = [NSString stringWithFormat:@"%@\n\n%@",
+                        LABDebugChainForView(view), LABDebugLayoutDetailsForView(view)];
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *controller = view.window.rootViewController;
         while (controller.presentedViewController) {
